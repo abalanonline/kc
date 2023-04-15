@@ -16,13 +16,27 @@
 
 package ab.kc;
 
+import ab.DualMidiReceiver;
+import ab.TnsSound;
 import ab.jnc2.GraphicsMode;
 import ab.jnc2.Screen;
 import ab.jnc2.TextFont;
 
+import javax.sound.midi.MidiSystem;
+import javax.sound.midi.Sequence;
+import javax.sound.midi.Sequencer;
+import javax.sound.midi.Soundbank;
+import javax.sound.midi.Synthesizer;
+import javax.sound.sampled.AudioInputStream;
+import javax.sound.sampled.AudioSystem;
 import java.awt.*;
 import java.awt.event.KeyEvent;
 import java.awt.event.KeyListener;
+import java.io.BufferedInputStream;
+import java.io.ByteArrayInputStream;
+import java.nio.file.Files;
+import java.nio.file.Paths;
+import java.util.Collections;
 
 public class App implements Runnable, KeyListener {
 
@@ -59,7 +73,7 @@ public class App implements Runnable, KeyListener {
     this.screen = screen;
     screen.keyListener = this;
     graphics = this.screen.image.createGraphics();
-    this.textFont = new TextFont(6, 6);
+    this.textFont = new TextFont(8, 8);
     cm = GraphicsMode.COLOR_MAP_CGA;
     ground = screen.mode.resolution.height * 3 / 4;
     hitBox = TAC9[0].length();
@@ -154,15 +168,55 @@ public class App implements Runnable, KeyListener {
     }
     drawTac(60, ground - 20 - pixHeight, phase / 8 % 2);
     if (treadmill[distance / 16 % treadmill.length] * 16 > pixHeight) running = false;
-    textFont.printCentered(screen.image, "Tac Nayn sluoS fo retaE", screen.mode.resolution.width / 2, 20, cm[7]);
+    textFont.printCentered(screen.image, "Tac Nayn sluoS fo retaE", screen.mode.resolution.width / 2, 15, cm[7]);
     textFont.print(screen.image, String.format("EROCS %04d", score), 120, 30, cm[7]);
     textFont.print(screen.image, String.format("CS IH %04d", hiScore), 120, 40, cm[7]);
+  }
+
+  public static void playMidi() {
+    try {
+      int program = 0;
+      for (int i = 1; i <= 128; i++) {
+        if (Files.exists(Paths.get("assets", i + ".wav"))) {
+          program = i;
+          break;
+        }
+      }
+
+      AudioInputStream audioInputStream = AudioSystem.getAudioInputStream(
+          new BufferedInputStream(Files.newInputStream(Paths.get("assets", program + ".wav"))));
+      byte[] pcm16 = audioInputStream.readAllBytes();
+      TnsSound.Font soundFont = new TnsSound.Font(1, pcm16, (int) audioInputStream.getFormat().getSampleRate(), "");
+      TnsSound.Instrument[] ins = soundFont.getInstruments();
+      ins[0].setSample(0, pcm16.length);
+      Soundbank soundbank = MidiSystem.getSoundbank(new ByteArrayInputStream(soundFont.toByteArray()));
+
+      Synthesizer customSynthesizer = MidiSystem.getSynthesizer();
+      customSynthesizer.open();
+      customSynthesizer.loadAllInstruments(soundbank);
+
+      Synthesizer defaultSynthesizer = MidiSystem.getSynthesizer();
+      defaultSynthesizer.open();
+
+      DualMidiReceiver midiReceiver = new DualMidiReceiver(
+          customSynthesizer.getReceiver(), defaultSynthesizer.getReceiver(), Collections.singletonMap(program, 1));
+
+      Sequencer sequencer = MidiSystem.getSequencer(false);
+      Sequence sequence = MidiSystem.getSequence(Files.newInputStream(Paths.get("assets/music.mid")));
+      sequencer.getTransmitter().setReceiver(midiReceiver);
+      sequencer.open();
+      sequencer.setSequence(sequence);
+      sequencer.start();
+    } catch (Exception e) {
+      throw new IllegalStateException(e);
+    }
   }
 
   public static void main(String[] args) {
     GraphicsMode graphicsMode = new GraphicsMode(240, 135); // FHD/8
     graphicsMode.aspectRatio = new Dimension(16, 9);
     Screen screen = new Screen(graphicsMode);
+    playMidi();
     screen.flicker(FPS, new App(screen));
   }
 

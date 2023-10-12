@@ -16,27 +16,24 @@
 
 package ab.kc;
 
-import ab.DualMidiReceiver;
-import ab.TnsSound;
 import ab.jnc2.GraphicsMode;
 import ab.jnc2.Screen;
 import ab.jnc2.TextFont;
 
+import javax.sound.midi.InvalidMidiDataException;
 import javax.sound.midi.MidiSystem;
+import javax.sound.midi.Receiver;
 import javax.sound.midi.Sequence;
 import javax.sound.midi.Sequencer;
+import javax.sound.midi.ShortMessage;
 import javax.sound.midi.Soundbank;
 import javax.sound.midi.Synthesizer;
-import javax.sound.sampled.AudioInputStream;
-import javax.sound.sampled.AudioSystem;
 import java.awt.*;
 import java.awt.event.KeyEvent;
 import java.awt.event.KeyListener;
-import java.io.BufferedInputStream;
-import java.io.ByteArrayInputStream;
 import java.nio.file.Files;
 import java.nio.file.Paths;
-import java.util.Collections;
+import java.util.function.Consumer;
 
 public class App implements Runnable, KeyListener {
 
@@ -53,6 +50,8 @@ public class App implements Runnable, KeyListener {
       "000012210122100000012210122100000", "000011100011100000001110011100000",
   };
   public static final int FPS = 50;
+  public static final int FX_JUMP = 124;
+  public static final int FX_HIT = 125;
 
   Screen screen;
   TextFont textFont;
@@ -68,6 +67,7 @@ public class App implements Runnable, KeyListener {
   int hitBox;
   int score;
   int hiScore;
+  Consumer<Integer> makeSound = i -> {};
 
   public App(Screen screen) {
     this.screen = screen;
@@ -95,7 +95,10 @@ public class App implements Runnable, KeyListener {
           break;
         }
         running = true;
-        if (velocity == 0) velocity = 40;
+        if (velocity == 0) {
+          velocity = 40;
+          makeSound.accept(FX_JUMP);
+        }
     }
   }
 
@@ -167,46 +170,32 @@ public class App implements Runnable, KeyListener {
       } while (i1 >= 0);
     }
     drawTac(60, ground - 20 - pixHeight, phase / 8 % 2);
-    if (treadmill[distance / 16 % treadmill.length] * 16 > pixHeight) running = false;
+    if (running && treadmill[distance / 16 % treadmill.length] * 16 > pixHeight) {
+      makeSound.accept(FX_HIT);
+      running = false;
+    }
     textFont.printCentered(screen.image, "Tac Nayn sluoS fo retaE", screen.mode.resolution.width / 2, 15, cm[7]);
     textFont.print(screen.image, String.format("EROCS %04d", score), 120, 30, cm[7]);
     textFont.print(screen.image, String.format("CS IH %04d", hiScore), 120, 40, cm[7]);
   }
 
-  public static void playMidi() {
+  public static Receiver playMidi() {
     try {
-      int program = 0;
-      for (int i = 1; i <= 128; i++) {
-        if (Files.exists(Paths.get("assets", i + ".wav"))) {
-          program = i;
-          break;
-        }
-      }
+      Soundbank soundbank = MidiSystem.getSoundbank(Files.newInputStream(Paths.get("assets/music.sf2")));
 
-      AudioInputStream audioInputStream = AudioSystem.getAudioInputStream(
-          new BufferedInputStream(Files.newInputStream(Paths.get("assets", program + ".wav"))));
-      byte[] pcm16 = audioInputStream.readAllBytes();
-      TnsSound.Font soundFont = new TnsSound.Font(1, pcm16, (int) audioInputStream.getFormat().getSampleRate(), "");
-      TnsSound.Instrument[] ins = soundFont.getInstruments();
-      ins[0].setSample(0, pcm16.length);
-      Soundbank soundbank = MidiSystem.getSoundbank(new ByteArrayInputStream(soundFont.toByteArray()));
+      Synthesizer synthesizer = MidiSystem.getSynthesizer();
+      synthesizer.open();
+      synthesizer.loadAllInstruments(soundbank);
 
-      Synthesizer customSynthesizer = MidiSystem.getSynthesizer();
-      customSynthesizer.open();
-      customSynthesizer.loadAllInstruments(soundbank);
-
-      Synthesizer defaultSynthesizer = MidiSystem.getSynthesizer();
-      defaultSynthesizer.open();
-
-      DualMidiReceiver midiReceiver = new DualMidiReceiver(
-          customSynthesizer.getReceiver(), defaultSynthesizer.getReceiver(), Collections.singletonMap(program, 1));
+      Receiver receiver = synthesizer.getReceiver();
 
       Sequencer sequencer = MidiSystem.getSequencer(false);
       Sequence sequence = MidiSystem.getSequence(Files.newInputStream(Paths.get("assets/music.mid")));
-      sequencer.getTransmitter().setReceiver(midiReceiver);
+      sequencer.getTransmitter().setReceiver(receiver);
       sequencer.open();
       sequencer.setSequence(sequence);
       sequencer.start();
+      return receiver;
     } catch (Exception e) {
       throw new IllegalStateException(e);
     }
@@ -216,8 +205,16 @@ public class App implements Runnable, KeyListener {
     GraphicsMode graphicsMode = new GraphicsMode(240, 135); // FHD/8
     graphicsMode.aspectRatio = new Dimension(16, 9);
     Screen screen = new Screen(graphicsMode);
-    playMidi();
-    screen.flicker(FPS, new App(screen));
+    Receiver receiver = playMidi();
+    App app = new App(screen);
+    app.makeSound = i -> {
+      try {
+        receiver.send(new ShortMessage(ShortMessage.NOTE_OFF, 15, 60, 0x7F), -1);
+        receiver.send(new ShortMessage(ShortMessage.PROGRAM_CHANGE, 15, i - 1, 0), -1);
+        receiver.send(new ShortMessage(ShortMessage.NOTE_ON, 15, 60, 0x7F), -1);
+      } catch (InvalidMidiDataException ignore) {}
+    };
+    screen.flicker(FPS, app);
   }
 
 }
